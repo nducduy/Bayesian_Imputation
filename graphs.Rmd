@@ -1,0 +1,383 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(mnormt)
+
+x     <- seq(-5, 5, 0.25) 
+y     <- seq(-5, 5, 0.25)
+mu    <- c(0, 0)
+sigma <- matrix(c(2, 1, 1, 2), nrow = 2)
+f     <- function(x, y) dmnorm(cbind(x, y), mu, sigma)
+z     <- outer(x, y, f)
+
+contour(x, y, z)
+
+```
+
+```{r}
+persp(x, y, z, theta = -30, phi = 25, 
+      shade = 0.75, col = "gold", expand = 0.5, r = 2, 
+      ltheta = 25, ticktype = "detailed")
+```
+
+```{r}
+library(ggplot2)
+x = seq(-3, 3, .01)
+y = dnorm(x, 0, 1)
+ggplot(as.data.frame(x,y), aes(x,y)) + geom_line(size = 1.5) + theme_classic()
+```
+
+
+```{r}
+x=seq(0,1,0.001)
+anna=dbeta(x,4.8,19.2) #Anna's Prior distributions
+bart=dbeta(x,1,1) #bart's Prior distributions
+
+#Chris's Prior distributions : piecewisely defined
+chris=rep(0,length(x))
+for(i in 1:length(x)){
+  if (x[i]<=0.10){
+    chris[i]=20*x[i]
+  }
+  if (x[i]>=0.1 & x[i]<=0.3){
+    chris[i]=2
+  }
+  
+  if (x[i]>=0.3 & x[i]<=0.5){
+    chris[i]=5-10*x[i]
+  }
+}
+
+ggplot(as.data.frame(x,anna), aes(x,anna)) + geom_line(color='red', size = 1.5) + 
+  geom_line(data = as.data.frame(x, chris), aes(x, chris), color='blue', size = 1.5) +
+  geom_line(data = as.data.frame(x, bart), aes(x, bart), color='green', size = 1.5) +
+  theme_classic() +
+  ylab('Y') +
+  xlim(c(0,.75)) +
+  labs(title = "Prior Distribution")
+```
+
+
+```{r}
+#Posterior distribution
+
+x=seq(0,1,0.001)
+n=100
+y=26
+anna=dbeta(x,4.8+y,19.2+n-y) #Anna's posterior distribution
+bart=dbeta(x,1+y,1+n-y) #bart's posterior distribution
+chris=rep(0,length(x))
+
+#Now we find Chris's posterior distribution numerically
+  #step 1 :define Chris's prior piecewisely
+chrisprior=function(x){
+  f=rep(0,length(x))
+for(i in 1:length(x)){
+  if (x[i]<=0.10){
+    f[i]=20*x[i]
+  }
+  if (x[i]>=0.1 & x[i]<=0.3){
+    f[i]=2
+  }
+  
+  if (x[i]>=0.3 & x[i]<=0.5){
+    f[i]=5-10*x[i]
+  }
+  
+}
+  return(f)
+}
+
+#Find normalized constant using Numerical integral
+C=integrate(function(t){chrisprior(t)*t^y*(1-t)^(n-y)},0,1)
+
+chris=(chrisprior(x)*x^y*(1-x)^(n-y))/C$value 
+
+ggplot(as.data.frame(x,anna), aes(x,anna)) + geom_line(color='red', size = 1.5) + 
+  geom_line(data = as.data.frame(x, chris), aes(x, chris), color='blue', size = 1.5) +
+  geom_line(data = as.data.frame(x, bart), aes(x, bart), color='green', size = 1.5) +
+  theme_classic() + 
+  ylab('Y') +
+  xlim(c(0,.75)) +
+  labs(title = "Posterior Distribution")
+
+```
+
+
+```{r}
+#Posterior mean, variance
+annamean=(4.9+y)/(4.8+n+19.2)
+annamean
+```
+```{r}
+bartmean=(1+y)/(1+n+1)
+bartmean
+```
+
+#Chris's posterior mean
+
+```{r}
+C1=integrate(function(t){t*chrisprior(t)*t^y*(1-t)^(n-y)},0,1)
+chrismean=C1$value/C$value
+chrismean
+```
+
+
+
+#-------------------------------------
+#Multivariate Normal
+#---------------------------------
+```{r}
+# priors
+mu0<-1.9  ; t20<-0.95^2
+s20<-.01 ; nu0<-1
+
+# data
+y<-c(1.64,1.70,1.72,1.74,1.82,1.82,1.82,1.90,2.08)
+n<-length(y) ; mean.y<-mean(y) ; var.y<-var(y)
+```
+
+```{r}
+#### Gibbs sampler
+
+## starting values
+set.seed(1)
+S<-1000
+PHI<-matrix(nrow=S,ncol=2)
+PHI[1,]<-phi<-c( mean.y, 1/var.y)
+
+## Gibbs sampling algorithm
+for(s in 2:S) {
+  
+  # generate a new theta value from its full conditional
+  mun<-  ( mu0/t20 + n*mean.y*phi[2] ) / ( 1/t20 + n*phi[2] )
+  t2n<- 1/( 1/t20 + n*phi[2] )
+  phi[1]<-rnorm(1, mun, sqrt(t2n) )
+  
+  # generate a new sigma^2 value from its full conditional
+  nun<- nu0+n
+  s2n<- (nu0*s20 + (n-1)*var.y + n*(mean.y-phi[1])^2 ) /nun
+  phi[2]<- rgamma(1, nun/2, nun*s2n/2)
+  
+  PHI[s,]<-phi    
+  
+}
+```
+
+
+```{r}
+#### Posterior quantiles
+quantile(PHI[,1],c(.025,.5,.975)) #for the mean
+quantile(PHI[,2],c(.025,.5, .975)) #for tilde(sigma^2)
+quantile(1/sqrt(PHI[,2]),c(.025,.5, .975)) #for sigma
+```
+
+
+```{r}
+#### Figure
+  
+par(mfrow=c(1,3),mar=c(2.75,2.75,2,.5),mgp=c(1.70,.70,0))
+m1<-5
+plot( PHI[1:m1,],type="l",xlim=range(PHI[1:100,1]), ylim=range(PHI[1:100,2]),
+      lty=1,col="gray",xlab=expression(theta),ylab=expression(tilde(sigma)^2))
+text(  PHI[1:m1,1], PHI[1:m1,2], c(1:m1) )
+
+m1<-15
+plot( PHI[1:m1,],type="l",xlim=range(PHI[1:100,1]), ylim=range(PHI[1:100,2]),
+      lty=1,col="gray",xlab=expression(theta),ylab=expression(tilde(sigma)^2))
+text(  PHI[1:m1,1], PHI[1:m1,2], c(1:m1) )
+
+m1<-100
+plot( PHI[1:m1,],type="l",xlim=range(PHI[1:100,1]), ylim=range(PHI[1:100,2]),
+      lty=1,col="gray",xlab=expression(theta),ylab=expression(tilde(sigma)^2))
+text(  PHI[1:m1,1], PHI[1:m1,2], c(1:m1) )
+
+mtext("Estimates for Theta and Sigma from Gibbs Sampler", side = 3, line = -1.5, outer = TRUE)
+```
+
+
+```{r}
+par(mfrow=c(1,2),mar=c(2.75,2.75,1.5,.5),mgp=c(1.70,.70,0))
+sseq<-1:1000
+
+plot(density(PHI[,1],adj=2),  lwd = 2,
+     xlab=expression(theta),main="",
+     xlim=c(1.55,2.05),
+     ylab=expression( paste(italic("p("),
+        theta,"|",italic(y[1]),"...",italic(y[n]),")",sep="")))
+    abline(v=quantile(PHI[,1],prob=c(.025,.975)),lwd=2,col="red")
+
+## t-test based confidence interval
+#n<-length(y) ; ybar<-mean(y) ; s2<-var(y)
+#ybar+qt( c(.025,.975), n-1) *sqrt(s2/n)
+#abline( v= ybar+qt( c(.025,.975), n-1) *sqrt(s2/n), col="black",lwd=1)
+
+plot(density(PHI[,2],adj=2), lwd = 2, 
+     xlab=expression(tilde(sigma)^2),main="",
+     ylab=expression( paste(italic("p("),
+      tilde(sigma)^2,"|",italic(y[1]),"...",italic(y[n]),")",sep=""))) 
+    abline(v=quantile(PHI[,2],prob=c(.025,.975)),lwd=2,col="red")
+    
+mtext("Estimate for Theta and Sigma with 95% Credible Interval", side = 3, line = -1, outer = TRUE)
+```
+
+Multivariate Normal Example with Gibbs Sampling
+```{r}
+#### Simulate multivariate normal vector
+rmvnorm<-
+  function(n,mu,Sigma) {
+    p<-length(mu)
+    res<-matrix(0,nrow=n,ncol=p)
+    if( n>0 & p>0 ) {
+      E<-matrix(rnorm(n*p),n,p)
+      res<-t(  t(E%*%chol(Sigma)) +c(mu))
+    }
+    res
+  }
+```
+
+
+```{r}
+library(MASS) ; 
+source("https://foxweb.marist.edu/users/duy.nguyen2/hdr2d.r")
+```
+
+
+```{r}
+#### Log density of the multivariate normal distribution
+ldmvnorm<-function(y,mu,Sig){  # log mvn density
+  c(  -(length(mu)/2)*log(2*pi) -.5*log(det(Sig)) -.5*
+        t(y-mu)%*%solve(Sig)%*%(y-mu)   )  
+}
+```
+
+
+```{r}
+rinvwish<-function(n,nu0,iS0) 
+{
+  sL0 <- chol(iS0) 
+  S<-array( dim=c( dim(L0),n ) )
+  for(i in 1:n) 
+  {
+    Z <- matrix(rnorm(nu0 * dim(L0)[1]), nu0, dim(iS0)[1]) %*% sL0  
+    S[,,i]<- solve(t(Z)%*%Z)
+  }     
+  S[,,1:n]
+}
+```
+
+
+```{r}
+#### Simulate from the Wishart distribution
+rwish<-function(n,nu0,S0)
+{
+  sS0 <- chol(S0)
+  S<-array( dim=c( dim(S0),n ) )
+  for(i in 1:n)
+  {
+    Z <- matrix(rnorm(nu0 * dim(S0)[1]), nu0, dim(S0)[1]) %*% sS0
+    S[,,i]<- t(Z)%*%Z
+  }
+  S[,,1:n]
+}
+```
+
+```{r}
+load('reading.RData')
+Y<-reading
+Y[,2]
+```
+
+
+```{r}
+mu0<-c(50,50)
+L0<-matrix( c(625,312.5,312.5,625),nrow=2,ncol=2)
+
+nu0<-4
+S0<-matrix( c(625,312.5,312.5,625),nrow=2,ncol=2)
+
+n<-dim(Y)[1] ; ybar<-apply(Y,2,mean)
+Sigma<-cov(Y) ; THETA<-SIGMA<-NULL
+YS<-NULL
+set.seed(1)
+```
+
+
+```{r}
+for(s in 1:5000) 
+{
+  
+  ###update theta
+  Ln<-solve( solve(L0) + n*solve(Sigma) )
+  mun<-Ln%*%( solve(L0)%*%mu0 + n*solve(Sigma)%*%ybar )
+  theta<-rmvnorm(1,mun,Ln)  
+  ### 
+  
+  ###update Sigma
+  Sn<- S0 + ( t(Y)-c(theta) )%*%t( t(Y)-c(theta) ) 
+  #  Sigma<-rinvwish(1,nu0+n,solve(Sn))
+  Sigma<-solve( rwish(1, nu0+n, solve(Sn)) )
+  ###
+  
+  ###
+  YS<-rbind(YS,rmvnorm(1,theta,Sigma)) 
+  ###
+  
+  ### save results 
+  THETA<-rbind(THETA,theta) ; SIGMA<-rbind(SIGMA,c(Sigma))
+}
+```
+
+
+```{r}
+quantile(  SIGMA[,2]/sqrt(SIGMA[,1]*SIGMA[,4]), prob=c(.025,.5,.975) )
+quantile(   THETA[,2]-THETA[,1], prob=c(.025,.5,.975) )
+mean( THETA[,2]-THETA[,1])
+mean( THETA[,2]>THETA[,1]) 
+mean(YS[,2]>YS[,1])
+
+COR = SIGMA[,2]/sqrt(SIGMA[,1]*SIGMA[,4])
+
+sqrtSigma = sqrt(SIGMA[,c(1,4)])
+
+apply(THETA,2,mean)
+
+apply(sqrt(SIGMA),2,mean)
+
+mean(COR)
+```
+
+
+```{r, fig.height=5, fig.width=10}
+#### Figure
+#install.packages("ash")
+require(ash)
+
+par(mfrow=c(1,2),mgp=c(1.75,.75,0),mar=c(3,3,3,1), cex=1)
+
+plot.hdr2d(THETA,xlab=expression(theta[1]),ylab=expression(theta[2]), main='Mean')
+abline(0,1)
+
+plot.hdr2d(sqrtSigma,xlab=expression(sigma[1]),ylab=expression(sigma[2]), xlim=c(5,25), ylim=c(5,25), main='Standard Deviation')
+abline(0,1)
+
+#dev.off()
+```
+
+
+
+```{r, fig.height=6, fig.width=8}
+par(mfrow=c(2,1), cex=1.3, mar=c(2,3,1,1))
+hist(COR, main='Correlation Distribution', yaxt='n')
+boxplot(COR, horizontal=TRUE)
+```
+
+
+
