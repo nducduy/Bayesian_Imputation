@@ -1,0 +1,1146 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+#install.packages('mice')
+#install.packages('VIM')
+#install.packages('randomForest')
+#install.packages('caret')
+#install.packages('tidyverse')
+#install.packages('patchwork')
+library(ggplot2)
+library(randomForest)
+library(caret)
+library(mice)
+library(VIM)
+library(nnet)
+library(tidyverse)
+library(patchwork)
+```
+
+```{r}
+#### Simulate multivariate normal vector
+rmvnorm<-
+  function(n,mu,Sigma) {
+    p<-length(mu)
+    res<-matrix(0,nrow=n,ncol=p)
+    if( n>0 & p>0 ) {
+      E<-matrix(rnorm(n*p),n,p)
+      res<-t(  t(E%*%chol(Sigma)) +c(mu))
+    }
+    res
+  }
+```
+
+
+```{r}
+#### Simulate from the Wishart distribution
+rwish<-function(n,nu0,S0)
+{
+  sS0 <- chol(S0)
+  S<-array( dim=c( dim(S0),n ) )
+  for(i in 1:n)
+  {
+    Z <- matrix(rnorm(nu0 * dim(S0)[1]), nu0, dim(S0)[1]) %*% sS0
+    S[,,i]<- t(Z)%*%Z
+  }
+  S[,,1:n]
+}
+```
+
+
+```{r}
+miss = source('http://www2.stat.duke.edu/~pdh10/FCBS/Inline/Y.pima.miss')
+miss
+```
+
+```{r}
+Y = as.data.frame(miss)[,-5]
+
+### prior parameters
+
+n<-dim(Y)[1]
+p<-dim(Y)[2] 
+
+mu0<-colMeans(Y, na.rm=TRUE)
+sd0<-(mu0/2)
+
+L0<-matrix(.1,p,p) 
+diag(L0) = 1
+L0<-L0*outer(sd0, sd0)
+
+nu0<-p+2 
+S0<-L0
+
+#starting values
+Sigma<-S0 
+Y.full<-Y
+O<-1*(!is.na(Y))
+for (j in 1:p){
+  Y.full[is.na(Y.full[,j]),j]<-mean (Y.full[,j],na.rm=TRUE)
+}
+
+### Gibbs sampler
+
+THETA=SIGMA<-Y.MISS<-NULL
+set.seed(1)
+
+for (s in 1:1000) {
+  ###update theta
+  ybar<-apply (Y.full,2, mean) 
+  Ln=solve( solve(L0) + n*solve(Sigma))
+  mun<-Ln%*%( solve(L0)%*%mu0 + n*solve(Sigma)%*%ybar)
+  theta<-rmvnorm(1,mun, Ln)
+  
+  ###update Sigma
+  Sn=S0 + ( t(Y.full)-c(theta) ) %*%t( t(Y.full)-c(theta)) 
+  Sigma<-solve( rwish(1, nu0+n, solve(Sn)) )
+  
+  ###update missing data
+  for (i in 1:n){
+    b = (O[i,]==0)
+    a = (O[i,]==1) 
+    iSa<- solve(Sigma[a,a])
+    beta.j<- Sigma[b, a]%*%iSa 
+    Sigma.j <- Sigma[b,b] - Sigma[b,a]%*%iSa%*%Sigma[a,b]
+    theta.j<- theta[b] + beta.j%*%(t(Y.full[i,a])-theta[a]) 
+    Y.full[i,b] <- rmvnorm(1, theta.j, Sigma.j)
+  }
+  
+  ### save results
+  THETA = rbind(THETA,theta)
+  SIGMA = rbind(SIGMA,c(Sigma))
+  Y.MISS = rbind(Y.MISS, Y.full[O==0])
+}
+```
+
+
+```{r}
+impute<-function(Y.MISS,Y){
+  
+  imp_values = colMeans(Y.MISS)
+  
+  x = 1
+  
+  for(i in 1:dim(Y)[2]){
+    for(j in 1:dim(Y)[1]){
+      if(is.na(Y[j,i])){
+        Y[j,i] = imp_values[x]
+        x = x+1
+      }
+    }
+  }
+  return(Y)
+}
+```
+
+```{r}
+impute(Y.MISS, Y)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+data(iris)
+iris
+```
+```{r}
+iris_del = as.data.frame(apply(iris[,-5], 1:2, \(x) sample(c(x, NA), 1, prob=c(.8, .2))))
+iris_del$Species = iris$Species
+iris_del
+```
+
+```{r, fig.height=8, fig.width=8}
+md = md.pattern(iris_del[,-5], rotate.names = TRUE)
+as.data.frame(md)
+```
+```{r}
+aggr(iris_del[,-5], col=c('grey','red'), numbers=TRUE, sortVars=FALSE, sortCombs=TRUE, combined=TRUE, only.miss= TRUE, labels=names(iris_del[,-5]), cex.axis=.83, prop = FALSE, ylab = "Pattern of missing data")
+```
+
+
+```{r}
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- abs(cor(x, y))
+    txt <- format(c(r, 0.123456789), digits = digits)[1]
+    txt <- paste0(prefix, txt)
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = cex.cor*.6)
+}
+pairs(iris[,-5], lower.panel = panel.smooth, upper.panel = panel.cor, xaxt='n', yaxt='n', main='Iris Correlation Plot')
+```
+
+```{r}
+iris_rem = iris_del[complete.cases(iris_del),]
+iris_rem
+```
+
+
+```{r}
+sample <- sample(c(TRUE, FALSE), nrow(iris_rem), replace=TRUE, prob=c(0.7,0.3))
+iris_rem_train  <- iris_rem[sample, ]
+iris_rem_test   <- iris_rem[!sample, ]
+```
+
+
+```{r}
+iris_rem.rf = randomForest(formula = Species ~ ., data = iris_rem_train)
+iris_rem.rf
+```
+
+
+```{r}
+iris_rem_pred = predict(iris_rem.rf, newdata=iris_rem_test[,-5])
+iris_rem_pred[1:10]
+```
+
+```{r}
+xtab <- table(iris_rem_test$Species, iris_rem_pred)
+confusionMatrix(xtab)
+```
+
+```{r}
+model <- nnet::multinom(Species ~., data = iris_rem_train)
+predicted.classes <- model %>% predict(iris_rem_test)
+mean(predicted.classes == iris_rem_test$Species)
+```
+
+
+#################
+Data Imputation
+#################
+
+
+```{r}
+Y = as.data.frame(iris_del)[,-5]
+
+### prior parameters
+
+n<-dim(Y)[1]
+p<-dim(Y)[2] 
+
+mu0<-colMeans(Y, na.rm=TRUE)
+sd0<-(mu0/2)
+
+L0<-matrix(.1,p,p) 
+diag(L0) = 1
+L0<-L0*outer(sd0, sd0)
+
+nu0<-p+2 
+S0<-L0
+
+#starting values
+Sigma<-S0 
+Y.full<-Y
+O<-1*(!is.na(Y))
+for (j in 1:p){
+  Y.full[is.na(Y.full[,j]),j]<-mean (Y.full[,j],na.rm=TRUE)
+}
+
+### Gibbs sampler
+
+THETA=SIGMA<-Y.MISS<-NULL
+set.seed(1)
+
+for (s in 1:1000) {
+  ###update theta
+  ybar<-apply (Y.full,2, mean) 
+  Ln=solve( solve(L0) + n*solve(Sigma))
+  mun<-Ln%*%( solve(L0)%*%mu0 + n*solve(Sigma)%*%ybar)
+  theta<-rmvnorm(1,mun, Ln)
+  
+  ###update Sigma
+  Sn=S0 + ( t(Y.full)-c(theta) ) %*%t( t(Y.full)-c(theta)) 
+  Sigma<-solve( rwish(1, nu0+n, solve(Sn)) )
+  
+  ###update missing data
+  for (i in 1:n){
+    b = (O[i,]==0)
+    a = (O[i,]==1) 
+    iSa<- solve(Sigma[a,a])
+    beta.j<- Sigma[b, a]%*%iSa 
+    Sigma.j <- Sigma[b,b] - Sigma[b,a]%*%iSa%*%Sigma[a,b]
+    theta.j<- theta[b] + beta.j%*%(t(Y.full[i,a])-theta[a]) 
+    Y.full[i,b] <- rmvnorm(1, theta.j, Sigma.j)
+  }
+  
+  ### save results
+  THETA = rbind(THETA,theta)
+  SIGMA = rbind(SIGMA,c(Sigma))
+  Y.MISS = rbind(Y.MISS, Y.full[O==0])
+}
+```
+
+```{r}
+iris_gib = impute(Y.MISS, Y)
+```
+
+########Mean Imputation
+
+```{r}
+iris_mice = iris_del
+for(i in 1:ncol(iris_del)) {
+  iris_mice[ , i][is.na(iris_mice[ , i])] <- mean(iris_del[ , i], na.rm = TRUE)
+}
+iris_mice
+```
+
+```{r}
+sample <- sample(c(TRUE, FALSE), nrow(iris_mice), replace=TRUE, prob=c(0.7,0.3))
+iris_imp_train  <- iris_mice[sample, ]
+iris_imp_test   <- iris_mice[!sample, ]
+```
+
+
+```{r}
+iris_imp.rf = randomForest(formula = Species ~ ., data = iris_imp_train)
+iris_imp.rf
+```
+
+
+```{r}
+iris_imp_pred = predict(iris_imp.rf, newdata=iris_imp_test[,-5])
+iris_imp_pred[1:10]
+```
+
+```{r}
+xtab <- table(iris_imp_test$Species, iris_imp_pred)
+confusionMatrix(xtab)
+```
+
+
+```{r}
+model <- nnet::multinom(Species ~., data = iris_imp_train)
+predicted.classes <- model %>% predict(iris_imp_test)
+mean(predicted.classes == iris_imp_test$Species)
+```
+
+```{r}
+sample <- sample(c(TRUE, FALSE), nrow(iris), replace=TRUE, prob=c(0.7,0.3))
+iris_train  <- iris[sample, ]
+iris_test   <- iris[!sample, ]
+```
+
+
+```{r}
+iris.rf = randomForest(formula = Species ~ ., data = iris_train)
+iris.rf
+```
+
+
+```{r}
+iris_pred = predict(iris.rf, newdata=iris_test[,-5])
+iris_pred[1:10]
+```
+
+```{r}
+xtab <- table(iris_test$Species, iris_pred)
+confusionMatrix(xtab)
+```
+
+
+```{r}
+model <- nnet::multinom(Species ~., data = iris_train)
+predicted.classes <- model %>% predict(iris_test)
+mean(predicted.classes == iris_test$Species)
+```
+
+```{r}
+iris_gib$Species = iris$Species
+sample <- sample(c(TRUE, FALSE), nrow(iris_gib), replace=TRUE, prob=c(0.7,0.3))
+iris_gib_train  <- iris_gib[sample, ]
+iris_gib_test   <- iris_gib[!sample, ]
+```
+
+
+```{r}
+iris_gib.rf = randomForest(formula = Species ~ ., data = iris_gib_train)
+iris_gib.rf
+```
+
+
+```{r}
+iris_gib_pred = predict(iris_gib.rf, newdata=iris_gib_test[,-5])
+iris_gib_pred[1:10]
+```
+
+```{r}
+xtab <- table(iris_gib_test$Species, iris_gib_pred)
+confusionMatrix(xtab)
+```
+
+
+```{r}
+model <- nnet::multinom(Species ~., data = iris_gib_train)
+predicted.classes <- model %>% predict(iris_gib_test)
+mean(predicted.classes == iris_gib_test$Species)
+```
+
+##Accuracy of the immputation
+
+```{r}
+iris_sl = NULL
+iris_sw = NULL
+iris_pl = NULL
+iris_pw = NULL
+
+iris_sl$Sepal.Length_real = iris$Sepal.Length[is.na(iris_del$Sepal.Length)]
+iris_sw$Sepal.Width_real = iris$Sepal.Width[is.na(iris_del$Sepal.Width)]
+iris_pl$Petal.Length_real = iris$Petal.Length[is.na(iris_del$Petal.Length)]
+iris_pw$Petal.Width_real = iris$Petal.Width[is.na(iris_del$Petal.Width)]
+
+iris_sl$Sepal.Length_imp = iris_gib$Sepal.Length[is.na(iris_del$Sepal.Length)]
+iris_sw$Sepal.Width_imp = iris_gib$Sepal.Width[is.na(iris_del$Sepal.Width)]
+iris_pl$Petal.Length_imp = iris_gib$Petal.Length[is.na(iris_del$Petal.Length)]
+iris_pw$Petal.Width_imp = iris_gib$Petal.Width[is.na(iris_del$Petal.Width)]
+```
+
+```{r}
+#Sepal Length
+mean(abs(iris_sl[[1]] - iris_sl[[2]]))
+```
+```{r}
+#Sepal Width
+mean(abs(iris_sw[[1]] - iris_sw[[2]]))
+```
+```{r}
+#Petal Length
+mean(abs(iris_pl[[1]] - iris_pl[[2]]))
+```
+```{r}
+#Petal Width
+mean(abs(iris_pw[[1]] - iris_pw[[2]]))
+```
+
+####Mean Imputation
+
+```{r}
+iris_sl$Sepal.Length_mean = iris_mice$Sepal.Length[is.na(iris_del$Sepal.Length)]
+iris_sw$Sepal.Width_mean = iris_mice$Sepal.Width[is.na(iris_del$Sepal.Width)]
+iris_pl$Petal.Length_mean = iris_mice$Petal.Length[is.na(iris_del$Petal.Length)]
+iris_pw$Petal.Width_mean = iris_mice$Petal.Width[is.na(iris_del$Petal.Width)]
+```
+
+
+```{r}
+#Sepal Length
+mean(abs(iris_sl[[1]] - iris_sl[[3]]))
+```
+```{r}
+#Sepal Width
+mean(abs(iris_sw[[1]] - iris_sw[[3]]))
+```
+```{r}
+#Petal Length
+mean(abs(iris_pl[[1]] - iris_pl[[3]]))
+```
+```{r}
+#Petal Width
+mean(abs(iris_pw[[1]] - iris_pw[[3]]))
+```
+
+
+######Imputation Comparison
+
+```{r}
+sl = ggplot(as.data.frame(iris_sl), aes(Sepal.Length_real, Sepal.Length_imp)) + 
+  geom_point() + 
+  geom_abline(slope=1) +
+  theme_minimal() +
+  xlab("") +
+  ylab("Imputed") +
+  ggtitle("Sepal Length")
+sl
+```
+
+
+```{r}
+sw = ggplot(as.data.frame(iris_sw), aes(Sepal.Width_real, Sepal.Width_imp)) + 
+  geom_point() + 
+  geom_abline(slope=1) +
+  theme_minimal() +
+  xlab("") +
+  ylab("") +
+  ggtitle("Sepal Width")
+sw
+```
+
+
+```{r}
+pl = ggplot(as.data.frame(iris_pl), aes(Petal.Length_real, Petal.Length_imp)) + 
+  geom_point() + 
+  geom_abline(slope=1) +
+  theme_minimal() +
+  xlab("Actual") +
+  ylab("Imputed") +
+  ggtitle("Petal Length")
+pl
+```
+
+
+```{r}
+pw = ggplot(as.data.frame(iris_pw), aes(Petal.Width_real, Petal.Width_imp)) + 
+  geom_point() + 
+  geom_abline(slope=1) +
+  theme_minimal() +
+  xlab("Actual") +
+  ylab("") +
+  ggtitle("Petal Width")
+pw
+```
+```{r, fig.height=4.5, fig.width=8}
+#plot_grid(sl, sw, pl, pw, labels = 'Imputed vs Actual With Reference Line')
+(sl + sw) / (pl + pw) +  # Creating grid of plots
+  plot_annotation(title = "Iris Bayesian Imputed vs Actual Measurements", theme = theme(plot.title = element_text(size = 18, hjust=.5)))
+```
+
+
+########Mean Imputation Example
+
+```{r}
+ggplot(as.data.frame(iris_pl), aes(Petal.Length_real, Petal.Length_mean)) + 
+  geom_point() + 
+  geom_abline(slope=1) +
+  theme_minimal() +
+  xlab("Actual Petal Length") +
+  ylab("Mean Imputed Petal Length") +
+  ggtitle("Mean Imputed vs Actual Petal Length With Reference Line")+
+  ylim(1,6)
+```
+
+####################################
+#  value at risk
+####################################
+
+```{r}
+#step 1: generate the data
+set.seed(1)
+nvar=1000
+muvar=c(0,0)
+Sigmavar=matrix(c(1,0.8,0.8,1),2,2,byrow = TRUE)
+datavar=NULL;
+datavar=rmvnorm(nvar,muvar,Sigmavar)
+datavar=as.data.frame(datavar)
+datavar_del = as.data.frame(apply(datavar, 1:2,\(x) sample(c(x, NA), 1, prob=c(0.98,.02))))
+
+
+```
+
+
+```{r}
+Y = as.data.frame(datavar_del)
+
+### prior parameters
+
+n<-dim(Y)[1]
+p<-dim(Y)[2] 
+
+mu0<-colMeans(Y, na.rm=TRUE)
+sd0<-(mu0/2)
+
+L0<-matrix(.1,p,p) 
+diag(L0) = 1
+L0<-L0*outer(sd0, sd0)
+
+nu0<-p+2 
+S0<-L0
+
+#starting values
+Sigma<-S0 
+Y.full<-Y
+O<-1*(!is.na(Y))
+for (j in 1:p){
+  Y.full[is.na(Y.full[,j]),j]<-mean (Y.full[,j],na.rm=TRUE)
+}
+
+### Gibbs sampler
+
+THETA=SIGMA<-Y.MISS<-NULL
+set.seed(1)
+
+for (s in 1:1000) {
+  ###update theta
+  ybar<-apply (Y.full,2, mean) 
+  Ln=solve( solve(L0) + n*solve(Sigma))
+  mun<-Ln%*%( solve(L0)%*%mu0 + n*solve(Sigma)%*%ybar)
+  theta<-rmvnorm(1,mun, Ln)
+  
+  ###update Sigma
+  Sn=S0 + ( t(Y.full)-c(theta) ) %*%t( t(Y.full)-c(theta)) 
+  Sigma<-solve( rwish(1, nu0+n, solve(Sn)) )
+  
+  ###update missing data
+  for (i in 1:n){
+    b = (O[i,]==0)
+    a = (O[i,]==1) 
+    iSa<- solve(Sigma[a,a])
+    beta.j<- Sigma[b, a]%*%iSa 
+    Sigma.j <- Sigma[b,b] - Sigma[b,a]%*%iSa%*%Sigma[a,b]
+    theta.j<- theta[b] + beta.j%*%(t(Y.full[i,a])-theta[a]) 
+    Y.full[i,b] <- rmvnorm(1, theta.j, Sigma.j)
+  }
+  
+  ### save results
+  THETA = rbind(THETA,theta)
+  SIGMA = rbind(SIGMA,c(Sigma))
+  Y.MISS = rbind(Y.MISS, Y.full[O==0])
+}
+```
+
+```{r}
+datavar_gib = impute(Y.MISS, Y)
+```
+
+```{r}
+#calculate the mean_gib and Sigma_gib
+mean_gib=colMeans(datavar_gib[sapply(datavar_gib, is.numeric)]) 
+Sigma_gib=matrix(c(0,0,0,0),2,2)
+Sigma_gib= ( t(datavar_gib)-c(mean_gib) ) %*%t( t(datavar_gib)-c(mean_gib)) 
+Sigma_gib=Sigma_gib/nrow(datavar_gib)
+Sigma_gib=as.matrix(Sigma_gib)
+
+wvar=matrix(c(1/2,1/2),2,1)
+alphavar=0.05
+mean_var_gib=sum(wvar*mean_gib)+qnorm(alphavar)*sqrt(t(wvar)%*%Sigma_gib%*%(wvar))
+mean_var_gib
+
+```
+
+
+
+########Mean Imputation
+
+```{r}
+datavar_mice = datavar_del
+for(i in 1:ncol(datavar_del)) {
+  datavar_mice[ , i][is.na(datavar_mice[ , i])] <- mean(datavar_del[ , i], na.rm = TRUE)
+}
+datavar_mice
+```
+
+```{r}
+#calculate the mean_mle and Sigma_mle
+mean_mle=colMeans(datavar_mice[sapply(datavar_mice, is.numeric)]) 
+Sigma_mle=matrix(c(0,0,0,0),2,2)
+Sigma_mle= ( t(datavar_mice)-c(mean_mle) ) %*%t( t(datavar_mice)-c(mean_mle)) 
+Sigma_mle=Sigma_mle/nrow(datavar_mice)
+Sigma_mle=as.matrix(Sigma_mle)
+
+wvar=matrix(c(1/2,1/2),2,1)
+alphavar=0.05
+mean_var_mle=sum(wvar*mean_mle)+qnorm(alphavar)*sqrt(t(wvar)%*%Sigma_mle%*%(wvar))
+mean_var_mle
+
+#true value at risk
+mu_var_true=matrix(c(0,0),2,1)
+Sigma_var_true=matrix(c(1,0.8,0.8,1),2,2,byrow = TRUE)
+var_true=sum(wvar*mu_var_true)+qnorm(alphavar)*sqrt(t(wvar)%*%Sigma_var_true%*%(wvar))
+var_true
+```
+
+
+
+####################################
+#  Happiness Dataset
+####################################
+
+
+
+
+
+
+
+
+
+
+```{r}
+hapiness = read.csv('https://raw.githubusercontent.com/Will-Holt60/Test/master/World%20Happiness%20Report.csv')
+hapiness = hapiness[,-c(1,2,3)]
+hapiness = hapiness[, c(1, 2, 3, 4, 5, 8, 9)]
+hapiness = hapiness[complete.cases(hapiness), ]
+
+#sample <- sample(c(TRUE, FALSE), nrow(hapiness), replace=TRUE, prob=c(0.2,0.8))
+sample <- sample(c(TRUE, FALSE), nrow(hapiness), replace=TRUE, prob=c(1,0))
+hap  <- hapiness[sample, ]
+hap
+```
+```{r}
+hap_del = as.data.frame(apply(hap[,-1], 1:2, \(x) sample(c(x, NA), 1, prob=c(.8, .2))))
+hap_del$Life.Ladder = hap$Life.Ladder
+hap_del
+```
+
+```{r, fig.height=15, fig.width=20}
+md = md.pattern(hap_del[,-7], rotate.names = TRUE)
+as.data.frame(md)
+```
+```{r}
+aggr(hap_del[,-7], col=c('grey','red'), numbers=TRUE, sortVars=FALSE, sortCombs=TRUE, combined=TRUE, only.miss= TRUE, 
+     labels=names(hap_del[,-7]), cex.axis=.5, prop = FALSE, ylab = "Pattern of missing data")
+```
+
+
+```{r}
+panel.cor <- function(x, y, digits = 2, cex.cor, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- abs(cor(x, y))
+    txt <- format(c(r, 0.123456789), digits = digits)[1]
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = cex.cor*.6)
+}
+pairs(hap, lower.panel = panel.smooth, upper.panel = panel.cor, xaxt='n', yaxt='n', main='Happiness Correlation Plot')
+```
+
+```{r}
+hap_rem = hap_del[complete.cases(hap_del),]
+hap_rem
+```
+
+
+```{r}
+sample <- sample(c(TRUE, FALSE), nrow(hap_rem), replace=TRUE, prob=c(0.7,0.3))
+hap_rem_train  <- hap_rem[sample, ]
+hap_rem_test   <- hap_rem[!sample, ]
+```
+
+
+```{r}
+hap_rem.rf = randomForest(formula = Life.Ladder ~ ., data = hap_rem_train)
+hap_rem.rf
+```
+
+
+```{r}
+hap_rem_pred = predict(hap_rem.rf, newdata=hap_rem_test[,-7])
+hap_rem_pred[1:10]
+```
+
+```{r}
+rem_R2.rf = cor(hap_rem_test[,7], hap_rem_pred)^2
+rem_MSE.rf = mean((hap_rem_test[,7] - hap_rem_pred)^2)
+rem_RMSE.rf = sqrt(rem_MSE.rf)
+
+print(rem_R2.rf)
+print(rem_RMSE.rf)
+```
+
+```{r}
+hap_rem.lm = lm(formula = Life.Ladder ~ ., data = hap_rem_train)
+hap_rem_pred.lm = predict(hap_rem.lm, newdata=hap_rem_test[,-7])
+
+rem_R2.lm = cor(hap_rem_test[,7], hap_rem_pred.lm)^2
+rem_MSE.lm = mean((hap_rem_test[,7] - hap_rem_pred.lm)^2)
+rem_RMSE.lm = sqrt(rem_MSE.lm)
+
+print(rem_R2.lm)
+print(rem_RMSE.lm)
+```
+
+##############
+Test Against Originals
+####################
+
+
+```{r}
+org = hap[!complete.cases(hap_del),]
+hap_rem_pred = predict(hap_rem.rf, newdata=org[,-1])
+hap_rem_pred[1:10]
+```
+
+```{r}
+org_rem_R2.rf = cor(org[,1], hap_rem_pred)^2
+org_rem_MSE.rf = mean((org[,1] - hap_rem_pred)^2)
+org_rem_RMSE.rf = sqrt(org_rem_MSE.rf)
+
+print(org_rem_R2.rf)
+print(org_rem_RMSE.rf)
+```
+
+
+
+
+#################
+Data Imputation
+#################
+
+
+```{r}
+Y = as.data.frame(hap_del)
+
+### prior parameters
+
+n<-dim(Y)[1]
+p<-dim(Y)[2] 
+
+mu0<-colMeans(Y, na.rm=TRUE)
+sd0<-(mu0/2)
+
+L0<-matrix(.1,p,p) 
+diag(L0) = 1
+L0<-L0*outer(sd0, sd0)
+
+nu0<-p+2 
+S0<-L0
+
+#starting values
+Sigma<-S0 
+Y.full<-Y
+O<-1*(!is.na(Y))
+for (j in 1:p){
+  Y.full[is.na(Y.full[,j]),j]<-mean (Y.full[,j],na.rm=TRUE)
+}
+
+### Gibbs sampler
+
+THETA=SIGMA<-Y.MISS<-NULL
+set.seed(1)
+
+for (s in 1:1000) {
+  ###update theta
+  ybar<-apply (Y.full,2, mean) 
+  Ln=solve( solve(L0) + n*solve(Sigma))
+  mun<-Ln%*%( solve(L0)%*%mu0 + n*solve(Sigma)%*%ybar)
+  theta<-rmvnorm(1,mun, Ln)
+  
+  ###update Sigma
+  Sn=S0 + ( t(Y.full)-c(theta) ) %*%t( t(Y.full)-c(theta)) 
+  Sigma<-solve( rwish(1, nu0+n, solve(Sn)) )
+  
+  ###update missing data
+  for (i in 1:n){
+    b = (O[i,]==0)
+    a = (O[i,]==1) 
+    iSa<- solve(Sigma[a,a])
+    beta.j<- Sigma[b, a]%*%iSa 
+    Sigma.j <- Sigma[b,b] - Sigma[b,a]%*%iSa%*%Sigma[a,b]
+    theta.j<- theta[b] + beta.j%*%(t(Y.full[i,a])-theta[a]) 
+    Y.full[i,b] <- rmvnorm(1, theta.j, Sigma.j)
+  }
+  
+  ### save results
+  THETA = rbind(THETA,theta)
+  SIGMA = rbind(SIGMA,c(Sigma))
+  Y.MISS = rbind(Y.MISS, Y.full[O==0])
+  if(s %% 50 == 0) print(s)
+}
+```
+
+```{r}
+hap_gib = impute(Y.MISS, Y)
+```
+
+
+```{r}
+sample <- sample(c(TRUE, FALSE), nrow(hap_gib), replace=TRUE, prob=c(0.7,0.3))
+hap_gib_train  <- hap_gib[sample, ]
+hap_gib_test   <- hap_gib[!sample, ]
+```
+
+
+```{r}
+gib_hap.rf = randomForest(formula = Life.Ladder ~ ., data = hap_gib_train)
+gib_hap_pred.rf = predict(gib_hap.rf, newdata=hap_gib_test[,-7])
+
+gib_R2.rf = cor(hap_gib_test[,7], gib_hap_pred.rf)^2
+gib_MSE.rf = mean((hap_gib_test[,7] - gib_hap_pred.rf)^2)
+gib_RMSE.rf = sqrt(gib_MSE.rf)
+
+print(gib_R2.rf)
+print(gib_RMSE.rf)
+```
+
+```{r}
+gib_hap.lm = lm(formula = Life.Ladder ~ ., data = hap_gib_train)
+gib_hap_pred.lm = predict(gib_hap.lm, newdata=hap_gib_test[,-7])
+
+gib_R2.lm = cor(hap_gib_test[,7], gib_hap_pred.lm)^2
+gib_MSE.lm = mean((hap_gib_test[,7] - gib_hap_pred.lm)^2)
+gib_RMSE.lm = sqrt(gib_MSE.lm)
+
+print(gib_R2.lm)
+print(gib_RMSE.lm)
+```
+
+
+########Mean Imputation
+
+```{r}
+hap_mice = hap_del
+for(i in 1:ncol(hap_del)) {
+  hap_mice[ , i][is.na(hap_mice[ , i])] <- mean(hap_del[ , i], na.rm = TRUE)
+}
+hap_mice
+```
+
+```{r}
+sample <- sample(c(TRUE, FALSE), nrow(hap_mice), replace=TRUE, prob=c(0.7,0.3))
+hap_imp_train  <- hap_mice[sample, ]
+hap_imp_test   <- hap_mice[!sample, ]
+```
+
+
+```{r}
+imp_hap.rf = randomForest(formula = Life.Ladder ~ ., data = hap_imp_train)
+imp_hap_pred.rf = predict(imp_hap.rf, newdata=hap_imp_test[,-7])
+
+imp_R2.rf = cor(hap_imp_test[,7], imp_hap_pred.rf)^2
+imp_MSE.rf = mean((hap_imp_test[,7] - imp_hap_pred.rf)^2)
+imp_RMSE.rf = sqrt(imp_MSE.rf)
+
+print(imp_R2.rf)
+print(imp_RMSE.rf)
+```
+
+```{r}
+imp_hap.lm = lm(formula = Life.Ladder ~ ., data = hap_imp_train)
+imp_hap_pred.lm = predict(imp_hap.lm, newdata=hap_imp_test[,-7])
+
+imp_R2.lm = cor(hap_imp_test[,7], imp_hap_pred.lm)^2
+imp_MSE.lm = mean((hap_imp_test[,7] - imp_hap_pred.lm)^2)
+imp_RMSE.lm = sqrt(imp_MSE.lm)
+
+print(imp_R2.lm)
+print(imp_RMSE.lm)
+```
+
+
+############
+Original Happiness Dataset
+##############
+
+
+
+```{r}
+sample <- sample(c(TRUE, FALSE), nrow(hap), replace=TRUE, prob=c(0.7,0.3))
+hap_train  <- hap[sample, ]
+hap_test   <- hap[!sample, ]
+```
+
+
+```{r}
+hap.rf = randomForest(formula = Life.Ladder ~ ., data = hap_train)
+hap.rf
+```
+
+
+```{r}
+hap_pred = predict(hap.rf, newdata=hap_test[,-1])
+hap_pred[1:10]
+```
+
+```{r}
+R2.rf = cor(hap_test[,1], hap_pred)^2
+MSE.rf = mean((hap_test[,1] - hap_pred)^2)
+RMSE.rf = sqrt(MSE.rf)
+
+print(R2.rf)
+print(RMSE.rf)
+```
+
+```{r}
+hap.lm = lm(formula = Life.Ladder ~ ., data = hap_train)
+hap_pred.lm = predict(hap.lm, newdata=hap_test[,-1])
+
+R2.lm = cor(hap_test[,1], hap_pred.lm)^2
+MSE.lm = mean((hap_test[,1] - hap_pred.lm)^2)
+RMSE.lm = sqrt(MSE.lm)
+
+print(R2.lm)
+print(RMSE.lm)
+```
+
+
+
+##Accuracy of the immputation
+
+
+```{r}
+hap_lg = NULL
+hap_ss = NULL
+hap_hl = NULL
+hap_fm = NULL
+hap_pa = NULL
+hap_na = NULL
+
+hap_lg$Log.GDP.Per.Capita_real = hap$Log.GDP.Per.Capita[is.na(hap_del$Log.GDP.Per.Capita)]
+hap_ss$Social.Support_real = hap$Social.Support[is.na(hap_del$Social.Support)]
+hap_hl$Healthy.Life.Expectancy.At.Birth_real = hap$Healthy.Life.Expectancy.At.Birth[is.na(hap_del$Healthy.Life.Expectancy.At.Birth)]
+hap_fm$Freedom.To.Make.Life.Choices_real = hap$Freedom.To.Make.Life.Choices[is.na(hap_del$Freedom.To.Make.Life.Choices)]
+hap_pa$Positive.Affect_real = hap$Positive.Affect[is.na(hap_del$Positive.Affect)]
+hap_na$Negative.Affect_real = hap$Negative.Affect[is.na(hap_del$Negative.Affect)]
+
+hap_lg$Log.GDP.Per.Capita_imp = hap_gib$Log.GDP.Per.Capita[is.na(hap_del$Log.GDP.Per.Capita)]
+hap_ss$Social.Support_imp = hap_gib$Social.Support[is.na(hap_del$Social.Support)]
+hap_hl$Healthy.Life.Expectancy.At.Birth_imp = hap_gib$Healthy.Life.Expectancy.At.Birth[is.na(hap_del$Healthy.Life.Expectancy.At.Birth)]
+hap_fm$Freedom.To.Make.Life.Choices_imp = hap_gib$Freedom.To.Make.Life.Choices[is.na(hap_del$Freedom.To.Make.Life.Choices)]
+hap_pa$Positive.Affect_imp = hap_gib$Positive.Affect[is.na(hap_del$Positive.Affect)]
+hap_na$Negative.Affect_imp = hap_gib$Negative.Affect[is.na(hap_del$Negative.Affect)]
+```
+
+```{r}
+mean(abs(hap_lg[[1]] - hap_lg[[2]]))
+```
+```{r}
+mean(abs(hap_ss[[1]] - hap_ss[[2]]))
+```
+```{r}
+mean(abs(hap_hl[[1]] - hap_hl[[2]]))
+```
+```{r}
+mean(abs(hap_fm[[1]] - hap_fm[[2]]))
+```
+```{r}
+mean(abs(hap_pa[[1]] - hap_pa[[2]]))
+```
+```{r}
+mean(abs(hap_na[[1]] - hap_na[[2]]))
+```
+
+####Mean Imputation
+
+```{r}
+hap_lg$Log.GDP.Per.Capita_mean = hap_mice$Log.GDP.Per.Capita[is.na(hap_del$Log.GDP.Per.Capita)]
+hap_ss$Social.Support_mean = hap_mice$Social.Support[is.na(hap_del$Social.Support)]
+hap_hl$Healthy.Life.Expectancy.At.Birth_mean = hap_mice$Healthy.Life.Expectancy.At.Birth[is.na(hap_del$Healthy.Life.Expectancy.At.Birth)]
+hap_fm$Freedom.To.Make.Life.Choices_mean = hap_mice$Freedom.To.Make.Life.Choices[is.na(hap_del$Freedom.To.Make.Life.Choices)]
+hap_pa$Positive.Affect_mean = hap_mice$Positive.Affect[is.na(hap_del$Positive.Affect)]
+hap_na$Negative.Affect_mean = hap_mice$Negative.Affect[is.na(hap_del$Negative.Affect)]
+```
+
+
+```{r}
+mean(abs(hap_lg[[1]] - hap_lg[[3]]))
+```
+```{r}
+mean(abs(hap_ss[[1]] - hap_ss[[3]]))
+```
+```{r}
+mean(abs(hap_hl[[1]] - hap_hl[[3]]))
+```
+```{r}
+mean(abs(hap_fm[[1]] - hap_fm[[3]]))
+```
+```{r}
+mean(abs(hap_pa[[1]] - hap_pa[[3]]))
+```
+```{r}
+mean(abs(hap_na[[1]] - hap_na[[3]]))
+```
+
+
+######Imputation Comparison
+
+
+```{r}
+p1 = ggplot(as.data.frame(hap_lg), aes(Log.GDP.Per.Capita_real, Log.GDP.Per.Capita_imp)) + 
+  geom_point() + 
+  geom_abline(slope=1) +
+  theme_minimal() +
+  xlab("") +
+  ylab("Imputed") +
+  ggtitle("Log GDP Per Capita")
+p1
+```
+
+
+```{r}
+p2 = ggplot(as.data.frame(hap_ss), aes(Social.Support_real, Social.Support_imp)) + 
+  geom_point() + 
+  geom_abline(slope=1) +
+  theme_minimal() +
+  xlab("") +
+  ylab("") +
+  ggtitle("Social Support")
+p2
+```
+
+```{r}
+p5 = ggplot(as.data.frame(hap_hl), aes(Healthy.Life.Expectancy.At.Birth_real, Healthy.Life.Expectancy.At.Birth_imp)) + 
+  geom_point() + 
+  geom_abline(slope=1) +
+  theme_minimal() +
+  xlab("") +
+  ylab("") +
+  xlim(35,80) +
+  ggtitle("Healthy Life Expectancy")
+p5
+```
+
+
+```{r}
+p3 = ggplot(as.data.frame(hap_fm), aes(Freedom.To.Make.Life.Choices_real, Freedom.To.Make.Life.Choices_imp)) + 
+  geom_point() + 
+  geom_abline(slope=1) +
+  theme_minimal() +
+  xlab("Actual") +
+  ylab("Imputed") +
+  ggtitle("Freedom")
+p3
+```
+
+
+```{r}
+p4 = ggplot(as.data.frame(hap_pa), aes(Positive.Affect_real, Positive.Affect_imp)) + 
+  geom_point() + 
+  geom_abline(slope=1) +
+  theme_minimal() +
+  xlab("Actual") +
+  ylab("") +
+  ggtitle("Positive Affect")
+p4
+```
+
+```{r}
+p6 = ggplot(as.data.frame(hap_na), aes(Negative.Affect_real, Negative.Affect_imp)) + 
+  geom_point() + 
+  geom_abline(slope=1) +
+  theme_minimal() +
+  xlab("Actual") +
+  ylab("") +
+  ggtitle("Negative Affect")
+p6
+```
+
+```{r, fig.height=4.5, fig.width=8}
+#plot_grid(sl, sw, pl, pw, labels = 'Imputed vs Actual With Reference Line')
+(p1 + p2 + p5) / (p3 + p4 + p6) +  # Creating grid of plots
+  plot_annotation(title = "Happiness Bayesian Imputed vs Actual Measurements", theme = theme(plot.title = element_text(size = 18, hjust=.5)))
+```
+
+
